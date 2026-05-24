@@ -4,7 +4,7 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 
 # ============ CONFIGURATION ============
 # !! IMPORTANT: Paste your new bot token from BotFather here !!
-TOKEN = "YOUR_NEW_BOT_TOKEN_HERE" 
+TOKEN = "8924432232:AAFLyaI-3CozY3oxfBeGVZ9hu-bhsuGWlVY" 
 
 ADMIN_PASSWORD = "sadmin"
 WEB_APP_URL = "https://primesador-maker.github.io/gemcart/"
