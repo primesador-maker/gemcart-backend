@@ -6,7 +6,7 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 import os
 
 # ============ CONFIGURATION ============
-TOKEN = os.getenv("BOT_TOKEN")  # Set this on Render
+TOKEN = os.getenv("8924432232:AAEFuN45Rfa7jwMiu9bIz2KT-J3_wK9fmuI")  # Set this on Render
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "sadmin")
 WEB_APP_URL = os.getenv("WEB_APP_URL", "https://primesador-maker.github.io/gemcart/")
 
