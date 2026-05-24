@@ -159,7 +159,7 @@ def add_broadcast():
 def verify_admin():
     data = request.json
     # Replace with YOUR Telegram user ID
-    ADMIN_IDS = [123456789]  # ← CHANGE THIS TO YOUR TELEGRAM ID
+    ADMIN_IDS = [ADMIN_IDS = [7715442708, 5960149589]]  # ← CHANGE THIS TO YOUR TELEGRAM ID
     user_id = data.get('userId')
     if user_id in ADMIN_IDS:
         return jsonify({"admin":True})
