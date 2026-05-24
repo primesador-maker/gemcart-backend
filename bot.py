@@ -1,25 +1,23 @@
-import asyncio
 import logging
-from aiogram import Bot, Dispatcher, types
-from aiogram.filters import Command
+from aiogram import Bot, Dispatcher, executor, types
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
-import os
 
 # ============ CONFIGURATION ============
-TOKEN = os.getenv("8924432232:AAEFuN45Rfa7jwMiu9bIz2KT-J3_wK9fmuI")  # Set this on Render
-ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "sadmin")
-WEB_APP_URL = os.getenv("WEB_APP_URL", "https://primesador-maker.github.io/gemcart/")
+# !! IMPORTANT: Paste your new bot token from BotFather here !!
+TOKEN = "YOUR_NEW_BOT_TOKEN_HERE" 
+
+ADMIN_PASSWORD = "sadmin"
+WEB_APP_URL = "https://primesador-maker.github.io/gemcart/"
 
 # ============ BOT SETUP ============
 bot = Bot(token=TOKEN)
-dp = Dispatcher()
+dp = Dispatcher(bot)
 
 # ============ COMMANDS ============
-@dp.message(Command("start"))
+@dp.message_handler(commands=["start"])
 async def cmd_start(message: types.Message):
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💎 Open GEM CART", web_app=WebAppInfo(url=WEB_APP_URL))]
-    ])
+    keyboard = InlineKeyboardMarkup()
+    keyboard.add(InlineKeyboardButton(text="💎 Open GEM CART", web_app=WebAppInfo(url=WEB_APP_URL)))
     await message.answer(
         f"✦ *Welcome to GEM CART* ✦\n\n"
         f"👤 Hello, {message.from_user.first_name}!\n\n"
@@ -28,7 +26,7 @@ async def cmd_start(message: types.Message):
         parse_mode="Markdown"
     )
 
-@dp.message(Command("admin"))
+@dp.message_handler(commands=["admin"])
 async def cmd_admin(message: types.Message):
     await message.answer(
         "🔐 Admin Panel\n\n"
@@ -37,7 +35,7 @@ async def cmd_admin(message: types.Message):
         parse_mode="Markdown"
     )
 
-@dp.message(Command("help"))
+@dp.message_handler(commands=["help"])
 async def cmd_help(message: types.Message):
     await message.answer(
         "💎 *GEM CART — Help*\n\n"
@@ -49,9 +47,6 @@ async def cmd_help(message: types.Message):
     )
 
 # ============ START BOT ============
-async def main():
-    logging.basicConfig(level=logging.INFO)
-    await dp.start_polling(bot)
-
 if __name__ == "__main__":
-    asyncio.run(main())
+    print("GEM CART Bot is starting...")
+    executor.start_polling(dp, skip_updates=True)
