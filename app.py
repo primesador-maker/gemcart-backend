@@ -169,6 +169,42 @@ def verify_admin():
 def health():
     return jsonify({"status":"healthy"})
 
+# ============ TELEGRAM BOT INTEGRATION ============
+import asyncio
+import threading
+from aiogram import Bot, Dispatcher, executor, types
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
+
+BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"  # ← Paste your real token
+WEB_APP_URL = "https://primesador-maker.github.io/gemcart/"
+
+telegram_bot = Bot(token=BOT_TOKEN)
+telegram_dp = Dispatcher(telegram_bot)
+
+@telegram_dp.message_handler(commands=["start"])
+async def cmd_start(message: types.Message):
+    keyboard = InlineKeyboardMarkup()
+    keyboard.add(InlineKeyboardButton(text="💎 Open GEM CART", web_app=WebAppInfo(url=WEB_APP_URL)))
+    await message.answer(
+        f"Welcome to GEM CART!\n\nHello, {message.from_user.first_name}!\nTap below to browse our luxury collection.",
+        reply_markup=keyboard
+    )
+
+@telegram_dp.message_handler(commands=["admin"])
+async def cmd_admin(message: types.Message):
+    await message.answer("Admin Panel: Open the Mini App and click ⚙️")
+
+@telegram_dp.message_handler(commands=["help"])
+async def cmd_help(message: types.Message):
+    await message.answer("GEM CART Help\n\n/start - Open shop\n/admin - Admin info\n/help - This message")
+
+def run_bot():
+    executor.start_polling(telegram_dp, skip_updates=True)
+
+# Start bot in background thread
+bot_thread = threading.Thread(target=run_bot)
+bot_thread.daemon = True
+bot_thread.start()
 if __name__ == '__main__':
     port = int(os.environ.get('PORT',5000))
     app.run(host='0.0.0.0',port=port)
