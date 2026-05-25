@@ -7,7 +7,6 @@ from datetime import datetime
 app = Flask(__name__)
 CORS(app)
 
-# ============ DATABASE ============
 def get_db():
     conn = sqlite3.connect('gemcart.db')
     conn.row_factory = sqlite3.Row
@@ -32,22 +31,20 @@ def init_db():
         id INTEGER PRIMARY KEY AUTOINCREMENT, time TEXT,
         message TEXT, photo TEXT
     )''')
-    # Add default products if empty
     count = conn.execute('SELECT COUNT(*) FROM products').fetchone()[0]
     if count == 0:
-        conn.execute("INSERT INTO products (name,category,gender,price,description,size,photos,stock,discount,featured,visible,sold) VALUES ('Emerald Backpack','Bags','Male',2200,'Handcrafted water-resistant backpack.','Large','https://placehold.co/400x400/0B2E1E/D4AF37?text=Backpack',5,0,1,1,0)")
+        conn.execute("INSERT INTO products (name,category,gender,price,description,size,photos,stock,discount,featured,visible,sold) VALUES ('Emerald Backpack','Bags','Male',2200,'Handcrafted backpack.','Large','https://placehold.co/400x400/0B2E1E/D4AF37?text=Backpack',5,0,1,1,0)")
         conn.execute("INSERT INTO products (name,category,gender,price,description,size,photos,stock,discount,featured,visible,sold) VALUES ('Golden Tote','Bags','Female',1200,'Premium canvas tote.','Medium','https://placehold.co/400x400/1A533E/F3D673?text=Tote',3,0,0,1,0)")
-        conn.execute("INSERT INTO products (name,category,gender,price,description,size,photos,stock,discount,featured,visible,sold) VALUES ('Diamond Stickers','Stickers','Unisex',350,'50pcs holographic stickers.',null,'https://placehold.co/400x400/0B2E1E/D4AF37?text=Stickers',20,10,1,1,0)")
+        conn.execute("INSERT INTO products (name,category,gender,price,description,size,photos,stock,discount,featured,visible,sold) VALUES ('Diamond Stickers','Stickers','Unisex',350,'50pcs stickers.',null,'https://placehold.co/400x400/0B2E1E/D4AF37?text=Stickers',20,10,1,1,0)")
         conn.execute("INSERT INTO products (name,category,gender,price,description,size,photos,stock,discount,featured,visible,sold) VALUES ('Crystal Bracelet','Jewelry','Female',450,'Natural crystal beads.','One Size','https://placehold.co/400x400/1A533E/F3D673?text=Bracelet',0,0,0,1,1)")
     conn.commit()
     conn.close()
 
 init_db()
 
-# ============ API ROUTES ============
 @app.route('/')
 def home():
-    return jsonify({"status":"GEM CART API","version":"1.0"})
+    return jsonify({"status":"GEM CART API"})
 
 @app.route('/api/products', methods=['GET'])
 def get_products():
@@ -118,7 +115,6 @@ def create_order():
     data = request.json
     oid = "GEM-"+datetime.now().strftime("%Y%m%d%H%M%S")
     conn = get_db()
-    # Decrease stock
     for item in data.get('items',[]):
         conn.execute('UPDATE products SET stock=MAX(0,stock-?), sold=CASE WHEN stock-?<=0 THEN 1 ELSE 0 END WHERE name=?',
             [item.get('qty',1),item.get('qty',1),item.get('name')])
@@ -158,8 +154,7 @@ def add_broadcast():
 @app.route('/api/admin/verify', methods=['POST'])
 def verify_admin():
     data = request.json
-    # Replace with YOUR Telegram user ID
-    ADMIN_IDS = [ADMIN_IDS = [7715442708, 5960149589]]  # ← CHANGE THIS TO YOUR TELEGRAM ID
+    ADMIN_IDS = [7715442708, 5960149589]
     user_id = data.get('userId')
     if user_id in ADMIN_IDS:
         return jsonify({"admin":True})
@@ -169,42 +164,6 @@ def verify_admin():
 def health():
     return jsonify({"status":"healthy"})
 
-# ============ TELEGRAM BOT INTEGRATION ============
-import asyncio
-import threading
-from aiogram import Bot, Dispatcher, executor, types
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
-
-BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"  # ← Paste your real token
-WEB_APP_URL = "https://primesador-maker.github.io/gemcart/"
-
-telegram_bot = Bot(token=BOT_TOKEN)
-telegram_dp = Dispatcher(telegram_bot)
-
-@telegram_dp.message_handler(commands=["start"])
-async def cmd_start(message: types.Message):
-    keyboard = InlineKeyboardMarkup()
-    keyboard.add(InlineKeyboardButton(text="💎 Open GEM CART", web_app=WebAppInfo(url=WEB_APP_URL)))
-    await message.answer(
-        f"Welcome to GEM CART!\n\nHello, {message.from_user.first_name}!\nTap below to browse our luxury collection.",
-        reply_markup=keyboard
-    )
-
-@telegram_dp.message_handler(commands=["admin"])
-async def cmd_admin(message: types.Message):
-    await message.answer("Admin Panel: Open the Mini App and click ⚙️")
-
-@telegram_dp.message_handler(commands=["help"])
-async def cmd_help(message: types.Message):
-    await message.answer("GEM CART Help\n\n/start - Open shop\n/admin - Admin info\n/help - This message")
-
-def run_bot():
-    executor.start_polling(telegram_dp, skip_updates=True)
-
-# Start bot in background thread
-bot_thread = threading.Thread(target=run_bot)
-bot_thread.daemon = True
-bot_thread.start()
 if __name__ == '__main__':
     port = int(os.environ.get('PORT',5000))
     app.run(host='0.0.0.0',port=port)
