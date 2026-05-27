@@ -34,10 +34,29 @@ def telegram_request(method, data):
         return None
 
 def send_message(chat_id, text, reply_markup=None):
+    """Send message with proper error logging"""
+    if BOT_TOKEN == "YOUR_BOT_TOKEN_HERE":
+        print("⚠️ Bot token not set")
+        return None
+    
     data = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
     if reply_markup:
         data["reply_markup"] = json.dumps(reply_markup)
-    return telegram_request("sendMessage", data)
+    
+    try:
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+        response = requests.post(url, data=data, timeout=15)
+        result = response.json()
+        
+        if result.get("ok"):
+            print(f"✅ Message sent to {chat_id}")
+        else:
+            print(f"❌ FAILED {chat_id}: Error {result.get('error_code')} - {result.get('description')}")
+        
+        return result
+    except Exception as e:
+        print(f"❌ Exception for {chat_id}: {e}")
+        return None
 
 def get_all_chat_ids():
     chat_ids = set()
@@ -55,13 +74,21 @@ def get_all_chat_ids():
                     chat_ids.add(cid)
     except:
         pass
+    print(f"📊 Found {len(chat_ids)} chat IDs: {chat_ids}")
     return chat_ids
 
 def broadcast_to_all(message, photo_url=None, video_url=None):
     chat_ids = get_all_chat_ids()
-    print(f"Broadcasting to {len(chat_ids)} users")
-    sent = 0
+    
+    if len(chat_ids) == 0:
+        print("⚠️ No users found")
+        return 0
+    
+    print(f"📣 Broadcasting to {len(chat_ids)} users...")
+    
     keyboard = {"inline_keyboard": [[{"text": "💎 Open GEM CART", "web_app": {"url": WEB_APP_URL}}]]}
+    sent = 0
+    failed = 0
     
     for cid in chat_ids:
         try:
@@ -71,13 +98,18 @@ def broadcast_to_all(message, photo_url=None, video_url=None):
                 r = telegram_request("sendPhoto", {"chat_id": cid, "photo": photo_url, "caption": message or "", "reply_markup": json.dumps(keyboard)})
             else:
                 r = send_message(cid, message, keyboard)
+            
             if r and r.get("ok"):
                 sent += 1
-            time_module.sleep(0.4)
+            else:
+                failed += 1
+            
+            time_module.sleep(0.5)
         except Exception as e:
-            print(f"Failed {cid}: {e}")
+            failed += 1
+            print(f"  ❌ Error for {cid}: {e}")
     
-    print(f"Sent to {sent}/{len(chat_ids)}")
+    print(f"✅ Broadcast: {sent} sent, {failed} failed")
     
     try:
         conn = get_db()
@@ -207,7 +239,6 @@ def health():
 
 # ============ TELEGRAM BOT ============
 def handle_bot_message(msg):
-    """Handle a single message from Telegram"""
     chat_id = str(msg["chat"]["id"])
     text = msg.get("text", "")
     first_name = msg.get("from", {}).get("first_name", "Customer")
@@ -215,42 +246,35 @@ def handle_bot_message(msg):
     
     print(f"📩 [{first_name}] {text}")
     
-    # /start command
     if text == "/start":
         keyboard = {"inline_keyboard": [[{"text": "💎 Open GEM CART", "web_app": {"url": WEB_APP_URL}}]]}
         send_message(chat_id, f"✨ <b>Welcome to GEM CART, {first_name}!</b>\n\n💎 Discover our luxury collection.\n🛍️ Tap below to start shopping:", keyboard)
         return
     
-    # /help command
     if text == "/help":
         keyboard = {"inline_keyboard": [[{"text": "💎 Open GEM CART", "web_app": {"url": WEB_APP_URL}}]]}
         send_message(chat_id, f"💎 <b>GEM CART Help</b>\n\n/start - Open shop\n/help - Help\n\n📱 Telebirr: {TELEBIRR_NUMBER}", keyboard)
         return
     
-    # /admin command (admin only)
     if text == "/admin" and is_admin:
-        send_message(chat_id, f"🔐 <b>Admin Commands:</b>\n\n/broadcast - Text to all\n/broadcast_photo - Photo to all\n/broadcast_video - Video to all")
+        send_message(chat_id, f"🔐 <b>Admin:</b>\n\n/broadcast - Text to all\n/broadcast_photo - Photo to all\n/broadcast_video - Video to all")
         return
     
-    # /broadcast command (admin only)
     if text == "/broadcast" and is_admin:
         pending_broadcasts[chat_id] = {"type": "text"}
-        send_message(chat_id, "📣 Type your broadcast message now:")
+        send_message(chat_id, "📣 Type your broadcast message:")
         return
     
-    # /broadcast_photo command (admin only)
     if text == "/broadcast_photo" and is_admin:
         pending_broadcasts[chat_id] = {"type": "photo", "caption": ""}
         send_message(chat_id, "📷 Type caption first, then send photo:")
         return
     
-    # /broadcast_video command (admin only)
     if text == "/broadcast_video" and is_admin:
         pending_broadcasts[chat_id] = {"type": "video", "caption": ""}
         send_message(chat_id, "🎬 Type caption first, then send video:")
         return
     
-    # Handle pending broadcast (admin only)
     if chat_id in pending_broadcasts and is_admin:
         pending = pending_broadcasts[chat_id]
         if pending["type"] in ["photo", "video"] and not pending.get("caption"):
@@ -262,7 +286,6 @@ def handle_bot_message(msg):
             send_message(chat_id, f"✅ Sent to {count} users!")
         return
     
-    # Handle photo for broadcast (admin only)
     if "photo" in msg and chat_id in pending_broadcasts and is_admin:
         pending = pending_broadcasts[chat_id]
         if pending["type"] == "photo":
@@ -279,7 +302,6 @@ def handle_bot_message(msg):
                 send_message(chat_id, "❌ Failed")
         return
     
-    # Handle video for broadcast (admin only)
     if "video" in msg and chat_id in pending_broadcasts and is_admin:
         file_id = msg["video"]["file_id"]
         try:
