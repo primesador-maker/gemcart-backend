@@ -11,14 +11,14 @@ app = Flask(__name__)
 CORS(app)
 
 # ============ CONFIG ============
-BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"  # ← REPLACE WITH YOUR REAL TOKEN
+BOT_TOKEN = "8924432232:AAFLyaI-3CozY3oxfBeGVZ9hu-bhsuGWlVY"  # ← REPLACE WITH YOUR REAL TOKEN
 ADMIN_CHAT_ID = "7715442708"
 TELEBIRR_NUMBER = "251990066832"
 TELEBIRR_NAME = "Biruk"
 WEB_APP_URL = "https://primesador-maker.github.io/gemcart/"
 
 def send_telegram(text):
-    if BOT_TOKEN == "YOUR_BOT_TOKEN_HERE": return
+    if BOT_TOKEN == "8924432232:AAFLyaI-3CozY3oxfBeGVZ9hu-bhsuGWlVY": return
     try:
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
         requests.post(url, json={"chat_id": ADMIN_CHAT_ID, "text": text}, timeout=10)
