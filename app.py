@@ -19,13 +19,10 @@ TELEBIRR_NAME = "Biruk"
 ADMIN_PASSWORD = "sadmin"
 WEB_APP_URL = "https://primesador-maker.github.io/gemcart/"
 
-# Store pending broadcasts waiting for media
 pending_broadcasts = {}
 
 def send_telegram(text, chat_id=None, reply_markup=None):
-    """Send message via Telegram bot"""
-    if BOT_TOKEN == "YOUR_BOT_TOKEN_HERE":
-        return
+    if BOT_TOKEN == "YOUR_BOT_TOKEN_HERE": return
     target = chat_id or ADMIN_CHAT_ID
     try:
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
@@ -36,53 +33,65 @@ def send_telegram(text, chat_id=None, reply_markup=None):
     except Exception as e:
         print(f"Send error: {e}")
 
-def send_photo(chat_id, photo_url, caption=""):
-    """Send photo via Telegram bot"""
-    if BOT_TOKEN == "YOUR_BOT_TOKEN_HERE":
-        return
-    try:
-        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
-        data = {"chat_id": chat_id, "photo": photo_url, "caption": caption}
-        requests.post(url, json=data, timeout=15)
-    except Exception as e:
-        print(f"Photo error: {e}")
-
-def send_video(chat_id, video_url, caption=""):
-    """Send video via Telegram bot"""
-    if BOT_TOKEN == "YOUR_BOT_TOKEN_HERE":
-        return
-    try:
-        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendVideo"
-        data = {"chat_id": chat_id, "video": video_url, "caption": caption}
-        requests.post(url, json=data, timeout=20)
-    except Exception as e:
-        print(f"Video error: {e}")
-
 def send_to_all_users(message, photo_url=None, video_url=None):
-    """Broadcast to all users who ever interacted with the bot"""
+    if BOT_TOKEN == "YOUR_BOT_TOKEN_HERE":
+        return 0
+    
+    chat_ids = set()
+    
+    # Get IDs from orders
     conn = get_db()
-    # Get unique chat IDs from orders
-    rows = conn.execute('SELECT DISTINCT customer_id FROM orders WHERE customer_id IS NOT NULL AND customer_id != ""').fetchall()
+    rows = conn.execute("SELECT DISTINCT customer_id FROM orders WHERE customer_id IS NOT NULL AND customer_id != '' AND customer_id != 'None'").fetchall()
     conn.close()
-    
-    sent_count = 0
     for row in rows:
-        try:
-            chat_id = row['customer_id']
-            if video_url:
-                send_video(chat_id, video_url, message)
-            elif photo_url:
-                send_photo(chat_id, photo_url, message)
-            else:
-                # Text with Open Shop button
-                keyboard = {"inline_keyboard": [[{"text": "💎 Open GEM CART", "web_app": {"url": WEB_APP_URL}}]]}
-                send_telegram(message, chat_id, keyboard)
-            sent_count += 1
-            time_module.sleep(0.5)  # Avoid rate limiting
-        except:
-            pass
+        cid = str(row['customer_id']).strip()
+        if cid and cid != 'None' and cid != '':
+            chat_ids.add(cid)
     
-    # Also save to database for Mini App display
+    # Always include admin
+    chat_ids.add(str(ADMIN_CHAT_ID))
+    
+    # Get recent Telegram users
+    try:
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates?limit=100"
+        resp = requests.get(url, timeout=10).json()
+        if resp.get('ok') and resp.get('result'):
+            for update in resp['result']:
+                cid = None
+                if 'message' in update:
+                    cid = str(update['message']['chat']['id'])
+                elif 'callback_query' in update:
+                    cid = str(update['callback_query']['message']['chat']['id'])
+                if cid:
+                    chat_ids.add(cid)
+    except:
+        pass
+    
+    print(f"📣 Broadcasting to {len(chat_ids)} users")
+    
+    keyboard = {"inline_keyboard": [[{"text": "💎 Open GEM CART", "web_app": {"url": WEB_APP_URL}}]]}
+    sent_count = 0
+    
+    for chat_id in chat_ids:
+        try:
+            if video_url:
+                r = requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendVideo",
+                    data={"chat_id": chat_id, "video": video_url, "caption": message or "", "reply_markup": json.dumps(keyboard)}, timeout=15)
+            elif photo_url:
+                r = requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto",
+                    data={"chat_id": chat_id, "photo": photo_url, "caption": message or "", "reply_markup": json.dumps(keyboard)}, timeout=15)
+            else:
+                r = requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+                    json={"chat_id": chat_id, "text": message, "parse_mode": "HTML", "reply_markup": keyboard}, timeout=10)
+            if r.json().get('ok'):
+                sent_count += 1
+            time_module.sleep(0.3)
+        except Exception as e:
+            print(f"Failed {chat_id}: {e}")
+    
+    print(f"✅ Sent to {sent_count}/{len(chat_ids)}")
+    
+    # Save to DB
     conn = get_db()
     conn.execute('INSERT INTO broadcasts (time, message, photo) VALUES (?, ?, ?)',
         [datetime.now().isoformat(), message, photo_url or video_url or ''])
@@ -202,24 +211,18 @@ def create_order():
             new_stock = max(0, current['stock'] - item_qty)
             sold_flag = 1 if new_stock <= 0 else 0
             conn.execute('UPDATE products SET stock=?, sold=? WHERE name=?',[new_stock, sold_flag, item_name])
-    # Save customer_id for broadcasts
-    customer_id = str(data.get('customerId', ''))
-    if not customer_id:
-        customer_id = str(data.get('chat_id', ''))
     conn.execute('INSERT INTO orders (id,date,customer_name,customer_username,customer_id,items,total,status) VALUES (?,?,?,?,?,?,?,?)',
         [oid,datetime.now().isoformat(),data.get('customerName',''),data.get('customerUsername',''),
-         customer_id,str(items),data.get('total',0),'pending'])
+         str(data.get('customerId','')),str(items),data.get('total',0),'pending'])
     conn.commit()
     conn.close()
     
-    # Notify admin
     customer = data.get('customerName','Unknown')
     username = data.get('customerUsername','@unknown')
     total = data.get('total',0)
     items_text = "\n".join([f"• {i.get('name','?')} × {i.get('qty',1)}" for i in items])
     msg = f"💎 <b>NEW ORDER!</b>\n\n🆔 {oid}\n👤 {customer}\n📧 {username}\n💰 {total:,} Birr\n\n📋 <b>Items:</b>\n{items_text}\n\n💳 Telebirr: {TELEBIRR_NUMBER} ({TELEBIRR_NAME})"
     threading.Thread(target=send_telegram, args=(msg,)).start()
-    
     return jsonify({"success":True,"orderId":oid})
 
 @app.route('/api/orders/<string:id>', methods=['PUT'])
@@ -241,19 +244,29 @@ def get_broadcasts():
 @app.route('/api/broadcasts', methods=['POST'])
 def add_broadcast():
     data = request.json
+    message = data.get('message','')
+    photo = data.get('photo','')
+    
+    # Save to DB
     conn = get_db()
     conn.execute('INSERT INTO broadcasts (time,message,photo) VALUES (?,?,?)',
-        [datetime.now().isoformat(),data.get('message'),data.get('photo')])
+        [datetime.now().isoformat(), message, photo])
     conn.commit()
     conn.close()
+    
+    # Send to all Telegram users
+    if message or photo:
+        count = send_to_all_users(message, photo_url=photo if photo else None)
+        return jsonify({"success":True,"sent":count})
+    
     return jsonify({"success":True})
 
 @app.route('/health')
 def health():
     return jsonify({"status":"healthy"})
 
-# ============ TELEGRAM BOT (FIXED - No Multiple Responses) ============
-processed_updates = set()  # Track processed updates to avoid duplicates
+# ============ TELEGRAM BOT ============
+processed_updates = set()
 
 def run_bot():
     if BOT_TOKEN == "YOUR_BOT_TOKEN_HERE":
@@ -275,24 +288,19 @@ def run_bot():
     
     def handle_update(update):
         update_id = update.get("update_id", 0)
-        
-        # Skip if already processed
         if update_id in processed_updates:
             return
         processed_updates.add(update_id)
-        
-        # Keep set small
         if len(processed_updates) > 1000:
             processed_updates.clear()
         
-        # Handle messages
         if "message" in update:
             msg = update["message"]
             chat_id = str(msg["chat"]["id"])
             text = msg.get("text", "")
             first_name = msg.get("from", {}).get("first_name", "Customer")
             
-            # Save customer ID for broadcasts
+            # Save customer ID
             if not is_admin(chat_id):
                 conn = get_db()
                 conn.execute('UPDATE orders SET customer_id=? WHERE customer_username=? AND customer_id=""',
@@ -301,99 +309,86 @@ def run_bot():
                 conn.close()
             
             if text == "/start":
+                # WELCOME MESSAGE WITH OPEN GEM CART BUTTON
+                keyboard = {
+                    "inline_keyboard": [[
+                        {"text": "💎 Open GEM CART", "web_app": {"url": WEB_APP_URL}}
+                    ]]
+                }
                 if is_admin(chat_id):
-                    keyboard = {
-                        "inline_keyboard": [
-                            [{"text": "💎 Open GEM CART", "web_app": {"url": WEB_APP_URL}}],
-                            [{"text": "📣 Send Broadcast", "callback_data": "broadcast"}]
-                        ]
-                    }
-                    send_msg(chat_id, f"✨ <b>Welcome Admin!</b>\n\n💎 GEM CART is ready.\n📣 Use /broadcast to send messages to all customers.\n\n🛍️ Tap below to open the shop:", keyboard)
+                    send_msg(chat_id, f"✨ <b>Welcome Admin!</b>\n\n💎 GEM CART is ready for you.\n\n🛍️ Tap below to open the shop:\n📣 Use /broadcast to send messages to customers.", keyboard)
                 else:
-                    keyboard = {
-                        "inline_keyboard": [[{"text": "💎 Open GEM CART", "web_app": {"url": WEB_APP_URL}}]]
-                    }
-                    send_msg(chat_id, f"✨ <b>Welcome to GEM CART, {first_name}!</b>\n\n💎 Discover our luxury collection.\n🛍️ Tap below to start shopping:", keyboard)
+                    send_msg(chat_id, f"✨ <b>Welcome to GEM CART, {first_name}!</b>\n\n💎 Discover our luxury collection of premium accessories.\n\n🛍️ Tap the button below to start shopping:", keyboard)
             
-            elif text == "/admin":
-                if is_admin(chat_id):
-                    send_msg(chat_id, f"🔐 <b>Admin Commands:</b>\n\n/broadcast - Send message to all customers\n/broadcast_photo - Send photo to all\n/broadcast_video - Send video to all\n\nPassword: <code>{ADMIN_PASSWORD}</code>")
-                else:
-                    send_msg(chat_id, "❌ Admin access only.")
+            elif text == "/admin" and is_admin(chat_id):
+                send_msg(chat_id, f"🔐 <b>Admin Commands:</b>\n\n/broadcast - Send text to all users\n/broadcast_photo - Send photo + caption\n/broadcast_video - Send video + caption\n\nPassword: <code>{ADMIN_PASSWORD}</code>")
             
             elif text == "/broadcast" and is_admin(chat_id):
                 pending_broadcasts[chat_id] = {"type": "text"}
-                send_msg(chat_id, "📣 <b>Send Broadcast</b>\n\nType your message now. It will be sent to ALL customers with an 'Open GEM CART' button.")
+                send_msg(chat_id, "📣 <b>Send Broadcast</b>\n\nType your message now. It will be sent to ALL users.")
             
             elif text == "/broadcast_photo" and is_admin(chat_id):
                 pending_broadcasts[chat_id] = {"type": "photo", "caption": ""}
-                send_msg(chat_id, "📷 <b>Send Photo Broadcast</b>\n\n1. First, type your caption text.\n2. Then send the photo.")
+                send_msg(chat_id, "📷 <b>Send Photo Broadcast</b>\n\n1. First, type your caption.\n2. Then send the photo.")
             
             elif text == "/broadcast_video" and is_admin(chat_id):
                 pending_broadcasts[chat_id] = {"type": "video", "caption": ""}
-                send_msg(chat_id, "🎬 <b>Send Video Broadcast</b>\n\n1. First, type your caption text.\n2. Then send the video.")
+                send_msg(chat_id, "🎬 <b>Send Video Broadcast</b>\n\n1. First, type your caption.\n2. Then send the video.")
             
             elif text == "/help":
-                send_msg(chat_id, "💎 <b>GEM CART Help</b>\n\n/start - Open the shop\n/help - This message\n\n📱 Payment via Telebirr:\n📞 {TELEBIRR_NUMBER} ({TELEBIRR_NAME})")
+                keyboard = {"inline_keyboard": [[{"text": "💎 Open GEM CART", "web_app": {"url": WEB_APP_URL}}]]}
+                send_msg(chat_id, "💎 <b>GEM CART Help</b>\n\n/start - Open the shop\n/help - This message\n\n📱 Payment via Telebirr:\n📞 {TELEBIRR_NUMBER} ({TELEBIRR_NAME})", keyboard)
             
-            # Handle pending broadcast text
-            elif chat_id in pending_broadcasts:
+            # Handle pending broadcast
+            elif chat_id in pending_broadcasts and is_admin(chat_id):
                 pending = pending_broadcasts[chat_id]
                 if pending["type"] in ["photo", "video"] and not pending.get("caption"):
                     pending["caption"] = text
-                    send_msg(chat_id, f"✅ Caption saved: <i>{text[:50]}...</i>\n\nNow send the {'photo' if pending['type']=='photo' else 'video'}.")
+                    send_msg(chat_id, f"✅ Caption saved!\n\nNow send the {'photo' if pending['type']=='photo' else 'video'}.")
                 else:
-                    # Text broadcast
                     count = send_to_all_users(text)
                     del pending_broadcasts[chat_id]
-                    send_msg(chat_id, f"✅ Broadcast sent to {count} customers!\n\nThey will see an 'Open GEM CART' button below your message.")
+                    send_msg(chat_id, f"✅ Broadcast sent to {count} users!")
             
-            # Handle photo for broadcast
-            elif "photo" in msg and chat_id in pending_broadcasts:
+            # Handle photo upload
+            elif "photo" in msg and chat_id in pending_broadcasts and is_admin(chat_id):
                 pending = pending_broadcasts[chat_id]
                 if pending["type"] == "photo":
-                    # Get the largest photo
                     photos = msg["photo"]
-                    largest = photos[-1]
-                    file_id = largest["file_id"]
-                    # Get file URL
-                    file_url = f"https://api.telegram.org/bot{BOT_TOKEN}/getFile?file_id={file_id}"
+                    file_id = photos[-1]["file_id"]
                     try:
-                        file_resp = requests.get(file_url).json()
+                        file_resp = requests.get(f"https://api.telegram.org/bot{BOT_TOKEN}/getFile?file_id={file_id}").json()
                         file_path = file_resp.get("result", {}).get("file_path", "")
                         photo_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_path}"
-                        count = send_to_all_users(pending["caption"], photo_url=photo_url)
+                        count = send_to_all_users(pending.get("caption",""), photo_url=photo_url)
                         del pending_broadcasts[chat_id]
-                        send_msg(chat_id, f"✅ Photo broadcast sent to {count} customers!")
+                        send_msg(chat_id, f"✅ Photo broadcast sent to {count} users!")
                     except:
                         del pending_broadcasts[chat_id]
-                        send_msg(chat_id, "❌ Failed to send photo.")
+                        send_msg(chat_id, "❌ Failed.")
             
-            # Handle video for broadcast
-            elif "video" in msg and chat_id in pending_broadcasts:
+            # Handle video upload
+            elif "video" in msg and chat_id in pending_broadcasts and is_admin(chat_id):
                 pending = pending_broadcasts[chat_id]
                 if pending["type"] == "video":
                     file_id = msg["video"]["file_id"]
-                    file_url = f"https://api.telegram.org/bot{BOT_TOKEN}/getFile?file_id={file_id}"
                     try:
-                        file_resp = requests.get(file_url).json()
+                        file_resp = requests.get(f"https://api.telegram.org/bot{BOT_TOKEN}/getFile?file_id={file_id}").json()
                         file_path = file_resp.get("result", {}).get("file_path", "")
                         video_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_path}"
-                        count = send_to_all_users(pending["caption"], video_url=video_url)
+                        count = send_to_all_users(pending.get("caption",""), video_url=video_url)
                         del pending_broadcasts[chat_id]
-                        send_msg(chat_id, f"✅ Video broadcast sent to {count} customers!")
+                        send_msg(chat_id, f"✅ Video broadcast sent to {count} users!")
                     except:
                         del pending_broadcasts[chat_id]
-                        send_msg(chat_id, "❌ Failed to send video.")
+                        send_msg(chat_id, "❌ Failed.")
         
-        # Handle callback queries (button clicks)
         elif "callback_query" in update:
             cb = update["callback_query"]
             chat_id = str(cb["message"]["chat"]["id"])
             data = cb.get("data", "")
-            
             if data == "broadcast" and is_admin(chat_id):
-                send_msg(chat_id, "📣 <b>Broadcast Options:</b>\n\n/broadcast - Text message\n/broadcast_photo - Photo + caption\n/broadcast_video - Video + caption")
+                send_msg(chat_id, "📣 <b>Broadcast:</b>\n\n/broadcast - Text\n/broadcast_photo - Photo\n/broadcast_video - Video")
     
     last_update_id = 0
     print("🤖 Bot started!")
@@ -403,7 +398,6 @@ def run_bot():
             url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates?offset={last_update_id + 1}&timeout=30"
             response = requests.get(url, timeout=35)
             data = response.json()
-            
             if data.get("ok") and data.get("result"):
                 for update in data["result"]:
                     update_id = update.get("update_id", 0)
@@ -414,10 +408,9 @@ def run_bot():
             print(f"Bot error: {e}")
         time_module.sleep(1)
 
-# Start bot
 if BOT_TOKEN != "YOUR_BOT_TOKEN_HERE":
     threading.Thread(target=run_bot, daemon=True).start()
-    print("🤖 Bot thread started!")
+    print("🤖 Bot started!")
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
