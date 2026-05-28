@@ -296,13 +296,44 @@ def static_files(filename):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     chat_id = update.effective_chat.id
+    
+    # Save user to database for broadcasts
     db = sqlite3.connect('gemcart.db')
-    db.execute('INSERT OR REPLACE INTO users (telegram_id, first_name, last_name, username, chat_id) VALUES (?,?,?,?,?)',
-               (user.id, user.first_name, user.last_name, user.username, chat_id))
+    db.execute(
+        'INSERT OR REPLACE INTO users (telegram_id, first_name, last_name, username, chat_id) VALUES (?,?,?,?,?)',
+        (user.id, user.first_name, user.last_name, user.username, chat_id)
+    )
     db.commit()
     db.close()
-    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("Open GEM CART", web_app=WebAppInfo(url="https://primesador-maker.github.io/gemcart"))]])
-    await update.message.reply_text("Welcome to GEM CART! Luxury jewels at your fingertips.", reply_markup=keyboard)
+    
+    # Get the user's first name (fallback to "Valued Customer" if missing)
+    first_name = user.first_name or "Valued Customer"
+    
+    # Create welcome message
+    welcome_text = f"""✨ *Welcome, {first_name}!* ✨
+
+🛒 Step into the world of *GEM CART* – where luxury meets elegance.
+
+💎 Discover handpicked jewelry & accessories
+🌟 Exclusive designs for every style
+🚚 Fast & secure ordering with Telebirr
+
+_Your personal shopping experience awaits._"""
+
+    # Create inline keyboard with "Open GEM CART" button
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton(
+            "💎 Open GEM CART 💎", 
+            web_app=WebAppInfo(url="https://primesador-maker.github.io/gemcart")
+        )]
+    ])
+    
+    # Send the welcome message with formatting
+    await update.message.reply_text(
+        welcome_text,
+        parse_mode='Markdown',
+        reply_markup=keyboard
+    )
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Use /start to open the app. Admins can broadcast with /broadcast, /broadcast_photo, /broadcast_video.")
