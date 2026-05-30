@@ -1,4 +1,4 @@
 flask
 flask-cors
 gunicorn
-python-telegram-bot==20.8
+python-telegram-bot==21.10
