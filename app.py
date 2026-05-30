@@ -7,12 +7,11 @@ from datetime import datetime
 from flask import Flask, request, jsonify, send_from_directory, g
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
-
-# Telegram imports
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 import asyncio
 import logging
+import atexit
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -203,7 +202,6 @@ def update_product(pid):
         db.execute('UPDATE products SET is_hidden=? WHERE id=?', (int(data['is_hidden']), pid))
     
     db.commit()
-    # Auto mark sold if stock is 0
     updated = db.execute('SELECT stock, is_sold FROM products WHERE id=?', (pid,)).fetchone()
     if updated['stock'] <= 0 and not updated['is_sold']:
         db.execute('UPDATE products SET is_sold=1 WHERE id=?', (pid,))
@@ -257,7 +255,6 @@ def create_order():
     db.commit()
     order_id = db.execute('SELECT last_insert_rowid()').fetchone()[0]
     
-    # Notify admin in background
     threading.Thread(target=notify_admin_order, args=(order_id,)).start()
     return jsonify({'order_id': order_id})
 
@@ -325,13 +322,17 @@ def broadcast():
 def static_files(filename):
     return send_from_directory('static', filename)
 
+@app.route('/health')
+def health():
+    return jsonify({'status': 'ok', 'bot_running': bot_running})
+
 # ==================== TELEGRAM BOT ====================
+bot_running = False
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /start command"""
     user = update.effective_user
     chat_id = update.effective_chat.id
     
-    # Save user
     db = sqlite3.connect('gemcart.db')
     db.execute(
         'INSERT OR REPLACE INTO users (telegram_id, first_name, last_name, username, chat_id) VALUES (?,?,?,?,?)',
@@ -360,20 +361,20 @@ _Your personal shopping experience awaits._"""
     logger.info(f"User {user.id} ({first_name}) started the bot")
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Use /start to open the app.")
+    await update.message.reply_text("Use /start to open the GEM CART app. Admins can use /broadcast <message> to send announcements.")
 
 async def handle_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Admin only: /broadcast <message>"""
     if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("You are not authorized to use this command.")
         return
     text = update.message.text.split(' ', 1)
     if len(text) < 2:
         await update.message.reply_text("Usage: /broadcast <message>")
         return
     await broadcast_to_all(text[1])
+    await update.message.reply_text("Broadcast sent!")
 
 async def broadcast_to_all(text):
-    """Send message to all users"""
     db = sqlite3.connect('gemcart.db')
     users = db.execute('SELECT chat_id FROM users').fetchall()
     db.close()
@@ -394,7 +395,6 @@ async def broadcast_to_all(text):
     logger.info(f"Broadcast sent to {success}/{len(users)} users")
 
 def send_broadcast_sync(message):
-    """Wrapper to run async broadcast from sync thread"""
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
@@ -405,7 +405,6 @@ def send_broadcast_sync(message):
         loop.close()
 
 def notify_admin_order(order_id):
-    """Send order notification to admin"""
     try:
         db = sqlite3.connect('gemcart.db')
         order = db.execute('SELECT * FROM orders WHERE id=?', (order_id,)).fetchone()
@@ -413,6 +412,7 @@ def notify_admin_order(order_id):
         db.close()
         
         if not order or not admin_user:
+            logger.warning("Cannot notify admin - order or admin user not found")
             return
         
         items = json.loads(order['items'])
@@ -440,25 +440,53 @@ def notify_admin_order(order_id):
     except Exception as e:
         logger.error(f"Notify admin error: {e}")
 
-# ==================== MAIN ====================
-init_db()
+def start_bot():
+    """Start the Telegram bot - only called once via Gunicorn preload"""
+    global bot_running
+    try:
+        logger.info("🤖 Starting Telegram bot...")
+        app_bot = Application.builder().token(BOT_TOKEN).build()
+        app_bot.add_handler(CommandHandler("start", start))
+        app_bot.add_handler(CommandHandler("help", help_cmd))
+        app_bot.add_handler(CommandHandler("broadcast", handle_broadcast))
+        
+        bot_running = True
+        logger.info("✅ Bot is running! Send /start to @GemCart_bot")
+        app_bot.run_polling()
+    except Exception as e:
+        bot_running = False
+        logger.error(f"❌ Bot failed: {e}")
 
-# Build bot application
-telegram_app = Application.builder().token(BOT_TOKEN).build()
-telegram_app.add_handler(CommandHandler("start", start))
-telegram_app.add_handler(CommandHandler("help", help_cmd))
-telegram_app.add_handler(CommandHandler("broadcast", handle_broadcast))
+# ==================== GUNICORN HOOK ====================
+# This ensures the bot starts ONCE when Gunicorn loads the app
+# Using post_worker_init or preload_app depending on workers
 
-# Run bot in background thread
-def run_bot():
-    logger.info("🤖 Bot starting...")
-    telegram_app.run_polling()
-    logger.info("🤖 Bot stopped")
+def start_bot_thread():
+    """Start bot in a daemon thread"""
+    bot_thread = threading.Thread(target=start_bot, daemon=True)
+    bot_thread.start()
+    return bot_thread
 
-bot_thread = threading.Thread(target=run_bot, daemon=True)
-bot_thread.start()
-logger.info("✅ Bot thread started")
+# Start bot when this module is imported by Gunicorn
+# Only start if we're the main script OR if Gunicorn preload is on
+import sys
+if 'gunicorn' in sys.modules or __name__ == '__main__':
+    # Use a flag file to ensure only one bot instance runs
+    lock_file = '/tmp/gemcart_bot.lock'
+    
+    if not os.path.exists(lock_file):
+        with open(lock_file, 'w') as f:
+            f.write(str(os.getpid()))
+        init_db()
+        start_bot_thread()
+        
+        # Clean up lock file on exit
+        def cleanup():
+            if os.path.exists(lock_file):
+                os.remove(lock_file)
+        atexit.register(cleanup)
+    else:
+        logger.info("Bot already running in another process, skipping...")
 
 if __name__ == '__main__':
-    logger.info("🌐 Flask server starting on port 5000...")
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
