@@ -66,14 +66,14 @@ async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(f"✅ Broadcast sent to {count} users")
 
-async def main():
+def main():
     app_bot = Application.builder().token(BOT_TOKEN).build()
     app_bot.add_handler(CommandHandler("start", start))
     app_bot.add_handler(CommandHandler("help", help_cmd))
     app_bot.add_handler(CommandHandler("broadcast", broadcast))
     
     logger.info("🤖 Bot started! Send /start to @GemCart_bot")
-    await app_bot.run_polling()
+    app_bot.run_polling()
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    main()
