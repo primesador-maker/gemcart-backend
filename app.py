@@ -7,15 +7,25 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppI
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 import logging
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 CORS(app)
 app.config['UPLOAD_FOLDER'] = 'static/uploads'
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50 MB
-ADMIN_ID = 7715442708
-BOT_TOKEN = os.environ.get('BOT_TOKEN', 'YOUR_BOT_TOKEN')
+
+ADMIN_ID = 7715442708  # Only you get order notifications
 PASSWORD = 'sadmin'
+
+# Get token from environment - CRASH if missing
+BOT_TOKEN = os.environ.get('BOT_TOKEN')
+if not BOT_TOKEN:
+    logger.error("❌ BOT_TOKEN environment variable not set!")
+    raise ValueError("BOT_TOKEN environment variable is required!")
 
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
@@ -204,7 +214,6 @@ def create_order():
     if not customer_id:
         return jsonify({'error': 'customer_id required'}), 400
     db = get_db()
-    # process items, check stock, decrease
     items = data.get('items', [])
     order_items = []
     total = 0.0
@@ -228,7 +237,7 @@ def create_order():
                 json.dumps(order_items), total, data.get('payment_method','Telebirr')))
     db.commit()
     order_id = db.execute('SELECT last_insert_rowid()').fetchone()[0]
-    # notify admin via bot
+    # Notify ONLY admin
     threading.Thread(target=notify_admin_order, args=(order_id,)).start()
     return jsonify({'order_id': order_id})
 
@@ -284,7 +293,6 @@ def admin_login():
 def broadcast():
     message = request.form.get('message', '')
     photo = request.files.get('photo')
-    # use bot to send to all users
     threading.Thread(target=send_broadcast, args=(message, photo)).start()
     return jsonify({'success': True})
 
@@ -306,10 +314,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db.commit()
     db.close()
     
-    # Get the user's first name (fallback to "Valued Customer" if missing)
+    # Personalized welcome
     first_name = user.first_name or "Valued Customer"
     
-    # Create welcome message
     welcome_text = f"""✨ *Welcome, {first_name}!* ✨
 
 🛒 Step into the world of *GEM CART* – where luxury meets elegance.
@@ -320,7 +327,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 _Your personal shopping experience awaits._"""
 
-    # Create inline keyboard with "Open GEM CART" button
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton(
             "💎 Open GEM CART 💎", 
@@ -328,7 +334,6 @@ _Your personal shopping experience awaits._"""
         )]
     ])
     
-    # Send the welcome message with formatting
     await update.message.reply_text(
         welcome_text,
         parse_mode='Markdown',
@@ -340,6 +345,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_broadcast_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
+        logger.warning(f"Unauthorized broadcast attempt from user {update.effective_user.id}")
         return
     text = update.message.text.split(' ', 1)
     if len(text) < 2:
@@ -349,89 +355,139 @@ async def handle_broadcast_text(update: Update, context: ContextTypes.DEFAULT_TY
 
 async def handle_broadcast_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
+        logger.warning(f"Unauthorized broadcast_photo attempt from user {update.effective_user.id}")
         return
     photo = update.message.photo[-1].file_id
-    caption = update.message.caption
-    if caption and caption.startswith('/broadcast_photo'):
+    caption = update.message.caption or ''
+    if caption.startswith('/broadcast_photo'):
         msg_text = caption.replace('/broadcast_photo', '').strip()
     else:
-        msg_text = ''
+        msg_text = caption
     await broadcast_to_all(msg_text, photo=photo, video=None)
 
-async def handle_broadcast_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_broadcast_video(update: Update, context:ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
+        logger.warning(f"Unauthorized broadcast_video attempt from user {update.effective_user.id}")
         return
     video = update.message.video.file_id
-    caption = update.message.caption
-    if caption and caption.startswith('/broadcast_video'):
+    caption = update.message.caption or ''
+    if caption.startswith('/broadcast_video'):
         msg_text = caption.replace('/broadcast_video', '').strip()
     else:
-        msg_text = ''
+        msg_text = caption
     await broadcast_to_all(msg_text, photo=None, video=video)
 
 async def broadcast_to_all(text, photo=None, video=None):
     db = sqlite3.connect('gemcart.db')
     users = db.execute('SELECT chat_id FROM users').fetchall()
     db.close()
-    app_bot = Application.builder().token(BOT_TOKEN).build().bot
-    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("Open GEM CART", web_app=WebAppInfo(url="https://primesador-maker.github.io/gemcart"))]])
+    
+    bot_app = Application.builder().token(BOT_TOKEN).build().bot
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("💎 Open GEM CART", web_app=WebAppInfo(url="https://primesador-maker.github.io/gemcart"))]
+    ])
+    
+    success_count = 0
+    fail_count = 0
+    
     for (chat_id,) in users:
         try:
             if photo:
-                await app_bot.send_photo(chat_id, photo, caption=text, reply_markup=keyboard)
+                await bot_app.send_photo(chat_id, photo, caption=text, reply_markup=keyboard)
             elif video:
-                await app_bot.send_video(chat_id, video, caption=text, reply_markup=keyboard)
+                await bot_app.send_video(chat_id, video, caption=text, reply_markup=keyboard)
             else:
-                await app_bot.send_message(chat_id, text, reply_markup=keyboard)
+                await bot_app.send_message(chat_id, text, reply_markup=keyboard)
+            success_count += 1
         except Exception as e:
-            logging.error(f"Broadcast to {chat_id} failed: {e}")
+            logger.error(f"Broadcast to {chat_id} failed: {e}")
+            fail_count += 1
+    
+    logger.info(f"Broadcast complete: {success_count} sent, {fail_count} failed")
 
 def send_broadcast(message, photo_file=None):
-    # This function is called from Flask thread, needs new event loop
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
-        if photo_file:
-            # Save photo temporarily and send as file
-            # Simpler: skip photo via API for now, but we'll implement by saving and getting file_id? Not trivial in sync.
-            # For simplicity, photo broadcast via admin panel will just send text.
-            loop.run_until_complete(broadcast_to_all(message))
-        else:
-            loop.run_until_complete(broadcast_to_all(message))
+        loop.run_until_complete(broadcast_to_all(message))
+    except Exception as e:
+        logger.error(f"Send broadcast error: {e}")
     finally:
         loop.close()
 
 def notify_admin_order(order_id):
-    db = sqlite3.connect('gemcart.db')
-    order = db.execute('SELECT * FROM orders WHERE id=?', (order_id,)).fetchone()
-    admin_user = db.execute('SELECT chat_id FROM users WHERE telegram_id=?', (ADMIN_ID,)).fetchone()
-    db.close()
-    if not admin_user:
-        return
-    chat_id = admin_user[0]
-    items = json.loads(order['items'])
-    text = f"🛒 New Order #{order['id']}\nCustomer: {order['customer_name']} (@{order['customer_username']})\nItems:\n"
-    for i in items:
-        text += f"- {i['name']} x{i['quantity']} = {i['price']*i['quantity']}\n"
-    text += f"Total: ETB {order['total_amount']}\nStatus: {order['status']}"
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    bot_app = Application.builder().token(BOT_TOKEN).build()
-    loop.run_until_complete(bot_app.bot.send_message(chat_id, text))
-    loop.close()
+    """Notify ONLY the admin (you) when a new order is placed"""
+    try:
+        db = sqlite3.connect('gemcart.db')
+        order = db.execute('SELECT * FROM orders WHERE id=?', (order_id,)).fetchone()
+        admin_user = db.execute('SELECT chat_id FROM users WHERE telegram_id=?', (ADMIN_ID,)).fetchone()
+        db.close()
+        
+        if not order:
+            logger.error(f"Order {order_id} not found for notification")
+            return
+            
+        if not admin_user:
+            logger.warning(f"Admin {ADMIN_ID} not found in users table. Have you sent /start to the bot?")
+            return
+            
+        chat_id = admin_user[0]
+        items = json.loads(order['items'])
+        
+        text = f"""🛒 *New Order #{order['id']}*
+
+👤 *Customer:* {order['customer_name']}
+📱 *Username:* @{order['customer_username']}
+
+📦 *Items:*
+"""
+        for i in items:
+            text += f"  • {i['name']} x{i['quantity']} = ETB {i['price']*i['quantity']}\n"
+        
+        text += f"""
+💰 *Total:* ETB {order['total_amount']}
+📌 *Status:* {order['status']}
+💳 *Payment:* {order['payment_method']}
+🕐 *Date:* {order['created_at']}
+"""
+        
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        bot_app = Application.builder().token(BOT_TOKEN).build()
+        loop.run_until_complete(
+            bot_app.bot.send_message(chat_id, text, parse_mode='Markdown')
+        )
+        loop.close()
+        logger.info(f"Order notification sent to admin for order #{order_id}")
+        
+    except Exception as e:
+        logger.error(f"Failed to notify admin about order #{order_id}: {e}")
 
 def run_bot():
-    application = Application.builder().token(BOT_TOKEN).build()
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("help", help_cmd))
-    application.add_handler(CommandHandler("broadcast", handle_broadcast_text))
-    application.add_handler(MessageHandler(filters.PHOTO & filters.CaptionRegex(r'^/broadcast_photo'), handle_broadcast_photo))
-    application.add_handler(MessageHandler(filters.VIDEO & filters.CaptionRegex(r'^/broadcast_video'), handle_broadcast_video))
-    application.run_polling()
+    """Run the Telegram bot with error handling"""
+    try:
+        logger.info("Starting Telegram bot...")
+        application = Application.builder().token(BOT_TOKEN).build()
+        
+        application.add_handler(CommandHandler("start", start))
+        application.add_handler(CommandHandler("help", help_cmd))
+        application.add_handler(CommandHandler("broadcast", handle_broadcast_text))
+        application.add_handler(MessageHandler(filters.PHOTO & filters.CaptionRegex(r'^/broadcast_photo'), handle_broadcast_photo))
+        application.add_handler(MessageHandler(filters.VIDEO & filters.CaptionRegex(r'^/broadcast_video'), handle_broadcast_video))
+        
+        logger.info("✅ Bot polling started successfully!")
+        application.run_polling()
+        
+    except Exception as e:
+        logger.error(f"❌ Bot crashed: {e}")
 
 # ==================== STARTUP ====================
+logger.info("Initializing database...")
 init_db()
+
+logger.info("Starting bot in background thread...")
 threading.Thread(target=run_bot, daemon=True).start()
 
 if __name__ == '__main__':
+    logger.info("Starting Flask server...")
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
