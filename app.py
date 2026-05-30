@@ -7,21 +7,17 @@ from datetime import datetime
 from flask import Flask, request, jsonify, send_from_directory, g
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
-import asyncio
 import logging
-import atexit
+import subprocess
+import sys
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ==================== CONFIG ====================
 BOT_TOKEN = "8924432232:AAEl9AvRZ9o6tII-YYW5waQoIcvg3wH4qXI"
 ADMIN_ID = 7715442708
 PASSWORD = "sadmin"
 
-# ==================== FLASK APP ====================
 app = Flask(__name__)
 CORS(app)
 app.config['UPLOAD_FOLDER'] = 'static/uploads'
@@ -43,8 +39,7 @@ def init_db():
                 first_name TEXT,
                 last_name TEXT,
                 username TEXT,
-                chat_id INTEGER,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                chat_id INTEGER
             );
             CREATE TABLE IF NOT EXISTS categories (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -61,8 +56,7 @@ def init_db():
                 video TEXT,
                 stock INTEGER DEFAULT 1,
                 is_sold INTEGER DEFAULT 0,
-                is_hidden INTEGER DEFAULT 0,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                is_hidden INTEGER DEFAULT 0
             );
             CREATE TABLE IF NOT EXISTS orders (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -72,12 +66,10 @@ def init_db():
                 items TEXT,
                 total_amount REAL,
                 payment_method TEXT DEFAULT 'Telebirr',
-                status TEXT DEFAULT 'pending',
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                status TEXT DEFAULT 'pending'
             );
             CREATE TABLE IF NOT EXISTS admin_tokens (
-                token TEXT PRIMARY KEY,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                token TEXT PRIMARY KEY
             );
         ''')
         db.commit()
@@ -88,7 +80,6 @@ def close_db(exception):
     if db is not None:
         db.close()
 
-# ==================== AUTH ====================
 def admin_required(f):
     def wrapper(*args, **kwargs):
         auth = request.headers.get('Authorization')
@@ -96,14 +87,17 @@ def admin_required(f):
             return jsonify({'error': 'Unauthorized'}), 401
         token = auth.split(' ')[1]
         db = get_db()
-        row = db.execute('SELECT token FROM admin_tokens WHERE token=?', (token,)).fetchone()
-        if not row:
+        if not db.execute('SELECT token FROM admin_tokens WHERE token=?', (token,)).fetchone():
             return jsonify({'error': 'Invalid token'}), 401
         return f(*args, **kwargs)
     wrapper.__name__ = f.__name__
     return wrapper
 
-# ==================== API ROUTES ====================
+# ==================== ROUTES ====================
+@app.route('/')
+def home():
+    return jsonify({'status': 'GEM CART API is running'})
+
 @app.route('/api/categories', methods=['GET'])
 def get_categories():
     db = get_db()
@@ -122,7 +116,7 @@ def add_category():
         db.execute('INSERT INTO categories (name) VALUES (?)', (name,))
         db.commit()
         return jsonify({'success': True})
-    except sqlite3.IntegrityError:
+    except:
         return jsonify({'error': 'Category exists'}), 400
 
 @app.route('/api/categories/<name>', methods=['DELETE'])
@@ -140,17 +134,10 @@ def get_products():
     products = []
     for r in rows:
         products.append({
-            'id': r['id'],
-            'name': r['name'],
-            'description': r['description'],
-            'price': r['price'],
-            'category': r['category'],
-            'gender': r['gender'],
-            'images': json.loads(r['images']),
-            'video': r['video'],
-            'stock': r['stock'],
-            'is_sold': bool(r['is_sold']),
-            'is_hidden': bool(r['is_hidden'])
+            'id': r['id'], 'name': r['name'], 'description': r['description'],
+            'price': r['price'], 'category': r['category'], 'gender': r['gender'],
+            'images': json.loads(r['images']), 'video': r['video'],
+            'stock': r['stock'], 'is_sold': bool(r['is_sold']), 'is_hidden': bool(r['is_hidden'])
         })
     return jsonify({'products': products})
 
@@ -161,49 +148,40 @@ def add_product():
     price = request.form.get('price')
     if not name or not price:
         return jsonify({'error': 'Name and price required'}), 400
-    
     images = []
     video = None
-    files = request.files.getlist('files')
-    for file in files[:5]:
+    for file in request.files.getlist('files')[:5]:
         filename = secure_filename(f"{uuid.uuid4()}_{file.filename}")
-        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-        file.save(filepath)
+        file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
         if file.mimetype.startswith('video'):
             video = filename
         else:
             images.append(filename)
-    
     db = get_db()
-    db.execute(
-        'INSERT INTO products (name,description,price,category,gender,images,video,stock) VALUES (?,?,?,?,?,?,?,?)',
-        (name, request.form.get('description', ''), float(price),
-         request.form.get('category', 'Uncategorized'), request.form.get('gender', 'Unisex'),
-         json.dumps(images), video, int(request.form.get('stock', 1)))
-    )
+    db.execute('INSERT INTO products (name,description,price,category,gender,images,video,stock) VALUES (?,?,?,?,?,?,?,?)',
+               (name, request.form.get('description',''), float(price),
+                request.form.get('category','Uncategorized'), request.form.get('gender','Unisex'),
+                json.dumps(images), video, int(request.form.get('stock',1))))
     db.commit()
     return jsonify({'success': True})
 
 @app.route('/api/products/<int:pid>', methods=['PUT'])
 @admin_required
 def update_product(pid):
-    db = get_db()
     data = request.get_json()
-    product = db.execute('SELECT * FROM products WHERE id=?', (pid,)).fetchone()
-    if not product:
+    db = get_db()
+    p = db.execute('SELECT * FROM products WHERE id=?', (pid,)).fetchone()
+    if not p:
         return jsonify({'error': 'Not found'}), 404
-    
     if 'stock_increment' in data:
-        new_stock = product['stock'] + data['stock_increment']
-        db.execute('UPDATE products SET stock=? WHERE id=?', (new_stock, pid))
+        db.execute('UPDATE products SET stock=? WHERE id=?', (p['stock']+data['stock_increment'], pid))
     if 'is_sold' in data:
         db.execute('UPDATE products SET is_sold=? WHERE id=?', (int(data['is_sold']), pid))
     if 'is_hidden' in data:
         db.execute('UPDATE products SET is_hidden=? WHERE id=?', (int(data['is_hidden']), pid))
-    
     db.commit()
-    updated = db.execute('SELECT stock, is_sold FROM products WHERE id=?', (pid,)).fetchone()
-    if updated['stock'] <= 0 and not updated['is_sold']:
+    updated = db.execute('SELECT stock FROM products WHERE id=?', (pid,)).fetchone()
+    if updated['stock'] <= 0:
         db.execute('UPDATE products SET is_sold=1 WHERE id=?', (pid,))
         db.commit()
     return jsonify({'success': True})
@@ -219,274 +197,69 @@ def delete_product(pid):
 @app.route('/api/orders', methods=['POST'])
 def create_order():
     data = request.get_json()
-    customer_id = data.get('customer_id')
-    if not customer_id:
-        return jsonify({'error': 'customer_id required'}), 400
-    
     db = get_db()
     items = data.get('items', [])
     order_items = []
     total = 0.0
-    
     for item in items:
         pid = item['product_id']
         qty = item['quantity']
-        product = db.execute('SELECT * FROM products WHERE id=?', (pid,)).fetchone()
-        if not product or product['stock'] < qty or product['is_sold']:
-            return jsonify({'error': f'Product {pid} not available'}), 400
-        
+        p = db.execute('SELECT * FROM products WHERE id=?', (pid,)).fetchone()
+        if not p or p['stock'] < qty or p['is_sold']:
+            return jsonify({'error': f'Product {pid} unavailable'}), 400
         db.execute('UPDATE products SET stock=stock-? WHERE id=?', (qty, pid))
-        order_items.append({
-            'product_id': pid,
-            'name': product['name'],
-            'price': product['price'],
-            'quantity': qty
-        })
-        total += product['price'] * qty
-        
-        if product['stock'] - qty <= 0:
+        order_items.append({'product_id': pid, 'name': p['name'], 'price': p['price'], 'quantity': qty})
+        total += p['price'] * qty
+        if p['stock'] - qty <= 0:
             db.execute('UPDATE products SET is_sold=1 WHERE id=?', (pid,))
-    
-    db.execute(
-        'INSERT INTO orders (customer_id,customer_name,customer_username,items,total_amount,payment_method) VALUES (?,?,?,?,?,?)',
-        (customer_id, data.get('customer_name', ''), data.get('customer_username', ''),
-         json.dumps(order_items), total, data.get('payment_method', 'Telebirr'))
-    )
+    db.execute('INSERT INTO orders (customer_id,customer_name,customer_username,items,total_amount,payment_method) VALUES (?,?,?,?,?,?)',
+               (data.get('customer_id'), data.get('customer_name',''), data.get('customer_username',''),
+                json.dumps(order_items), total, data.get('payment_method','Telebirr')))
     db.commit()
-    order_id = db.execute('SELECT last_insert_rowid()').fetchone()[0]
-    
-    threading.Thread(target=notify_admin_order, args=(order_id,)).start()
-    return jsonify({'order_id': order_id})
+    return jsonify({'order_id': db.execute('SELECT last_insert_rowid()').fetchone()[0]})
 
 @app.route('/api/orders', methods=['GET'])
 def get_orders():
     customer_id = request.args.get('customer_id')
-    all_orders = request.args.get('all')
     db = get_db()
-    
-    if all_orders:
+    if request.args.get('all'):
         auth = request.headers.get('Authorization')
         if not auth or not auth.startswith('Bearer '):
-            return jsonify({'error': 'Unauthorized'}), 401
-        token = auth.split(' ')[1]
-        if not db.execute('SELECT token FROM admin_tokens WHERE token=?', (token,)).fetchone():
-            return jsonify({'error': 'Unauthorized'}), 401
-        rows = db.execute('SELECT * FROM orders ORDER BY created_at DESC').fetchall()
+            return jsonify({'error':'Unauthorized'}), 401
+        if not db.execute('SELECT token FROM admin_tokens WHERE token=?', (auth.split(' ')[1],)).fetchone():
+            return jsonify({'error':'Unauthorized'}), 401
+        rows = db.execute('SELECT * FROM orders ORDER BY id DESC').fetchall()
     elif customer_id:
-        rows = db.execute('SELECT * FROM orders WHERE customer_id=? ORDER BY created_at DESC', (customer_id,)).fetchall()
+        rows = db.execute('SELECT * FROM orders WHERE customer_id=? ORDER BY id DESC', (customer_id,)).fetchall()
     else:
         return jsonify([])
-    
-    orders = []
-    for r in rows:
-        orders.append({
-            'id': r['id'],
-            'customer_id': r['customer_id'],
-            'customer_name': r['customer_name'],
-            'customer_username': r['customer_username'],
-            'items': json.loads(r['items']),
-            'total': r['total_amount'],
-            'status': r['status'],
-            'created_at': r['created_at']
-        })
-    return jsonify(orders)
+    return jsonify([{ 'id': r['id'], 'customer_id': r['customer_id'], 'customer_name': r['customer_name'],
+                     'customer_username': r['customer_username'], 'items': json.loads(r['items']),
+                     'total': r['total_amount'], 'status': r['status'] } for r in rows])
 
 @app.route('/api/orders/<int:oid>/status', methods=['PUT'])
 @admin_required
 def update_order_status(oid):
-    data = request.get_json()
     db = get_db()
-    db.execute('UPDATE orders SET status=? WHERE id=?', (data['status'], oid))
+    db.execute('UPDATE orders SET status=? WHERE id=?', (request.get_json()['status'], oid))
     db.commit()
     return jsonify({'success': True})
 
 @app.route('/api/admin/login', methods=['POST'])
 def admin_login():
-    data = request.get_json()
-    if data.get('password') == PASSWORD:
+    if request.get_json().get('password') == PASSWORD:
         token = str(uuid.uuid4())
-        db = get_db()
-        db.execute('INSERT INTO admin_tokens (token) VALUES (?)', (token,))
-        db.commit()
+        get_db().execute('INSERT INTO admin_tokens (token) VALUES (?)', (token,))
+        get_db().commit()
         return jsonify({'token': token})
     return jsonify({'error': 'Wrong password'}), 403
-
-@app.route('/api/broadcast', methods=['POST'])
-@admin_required
-def broadcast():
-    message = request.form.get('message', '')
-    threading.Thread(target=send_broadcast_sync, args=(message,)).start()
-    return jsonify({'success': True})
 
 @app.route('/static/<path:filename>')
 def static_files(filename):
     return send_from_directory('static', filename)
 
-@app.route('/health')
-def health():
-    return jsonify({'status': 'ok', 'bot_running': bot_running})
-
-# ==================== TELEGRAM BOT ====================
-bot_running = False
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    chat_id = update.effective_chat.id
-    
-    db = sqlite3.connect('gemcart.db')
-    db.execute(
-        'INSERT OR REPLACE INTO users (telegram_id, first_name, last_name, username, chat_id) VALUES (?,?,?,?,?)',
-        (user.id, user.first_name or '', user.last_name or '', user.username or '', chat_id)
-    )
-    db.commit()
-    db.close()
-    
-    first_name = user.first_name or "Valued Customer"
-    
-    welcome_text = f"""✨ *Welcome, {first_name}!* ✨
-
-🛒 Step into the world of *GEM CART* – where luxury meets elegance.
-
-💎 Discover handpicked jewelry & accessories
-🌟 Exclusive designs for every style
-🚚 Fast & secure ordering with Telebirr
-
-_Your personal shopping experience awaits._"""
-    
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("💎 Open GEM CART 💎", web_app=WebAppInfo(url="https://primesador-maker.github.io/gemcart"))]
-    ])
-    
-    await update.message.reply_text(welcome_text, parse_mode='Markdown', reply_markup=keyboard)
-    logger.info(f"User {user.id} ({first_name}) started the bot")
-
-async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Use /start to open the GEM CART app. Admins can use /broadcast <message> to send announcements.")
-
-async def handle_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("You are not authorized to use this command.")
-        return
-    text = update.message.text.split(' ', 1)
-    if len(text) < 2:
-        await update.message.reply_text("Usage: /broadcast <message>")
-        return
-    await broadcast_to_all(text[1])
-    await update.message.reply_text("Broadcast sent!")
-
-async def broadcast_to_all(text):
-    db = sqlite3.connect('gemcart.db')
-    users = db.execute('SELECT chat_id FROM users').fetchall()
-    db.close()
-    
-    bot_app = Application.builder().token(BOT_TOKEN).build().bot
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("💎 Open GEM CART", web_app=WebAppInfo(url="https://primesador-maker.github.io/gemcart"))]
-    ])
-    
-    success = 0
-    for (chat_id,) in users:
-        try:
-            await bot_app.send_message(chat_id, text, reply_markup=keyboard)
-            success += 1
-        except Exception as e:
-            logger.error(f"Broadcast to {chat_id} failed: {e}")
-    
-    logger.info(f"Broadcast sent to {success}/{len(users)} users")
-
-def send_broadcast_sync(message):
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        loop.run_until_complete(broadcast_to_all(message))
-    except Exception as e:
-        logger.error(f"Broadcast error: {e}")
-    finally:
-        loop.close()
-
-def notify_admin_order(order_id):
-    try:
-        db = sqlite3.connect('gemcart.db')
-        order = db.execute('SELECT * FROM orders WHERE id=?', (order_id,)).fetchone()
-        admin_user = db.execute('SELECT chat_id FROM users WHERE telegram_id=?', (ADMIN_ID,)).fetchone()
-        db.close()
-        
-        if not order or not admin_user:
-            logger.warning("Cannot notify admin - order or admin user not found")
-            return
-        
-        items = json.loads(order['items'])
-        text = f"""🛒 *New Order #{order['id']}*
-
-👤 *Customer:* {order['customer_name']}
-📱 *Username:* @{order['customer_username']}
-
-📦 *Items:*
-"""
-        for i in items:
-            text += f"  • {i['name']} x{i['quantity']} = ETB {i['price']*i['quantity']}\n"
-        
-        text += f"""
-💰 *Total:* ETB {order['total_amount']}
-📌 *Status:* {order['status']}
-"""
-        
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        bot_app = Application.builder().token(BOT_TOKEN).build()
-        loop.run_until_complete(bot_app.bot.send_message(admin_user[0], text, parse_mode='Markdown'))
-        loop.close()
-        logger.info(f"Order notification sent to admin for order #{order_id}")
-    except Exception as e:
-        logger.error(f"Notify admin error: {e}")
-
-def start_bot():
-    """Start the Telegram bot - only called once via Gunicorn preload"""
-    global bot_running
-    try:
-        logger.info("🤖 Starting Telegram bot...")
-        app_bot = Application.builder().token(BOT_TOKEN).build()
-        app_bot.add_handler(CommandHandler("start", start))
-        app_bot.add_handler(CommandHandler("help", help_cmd))
-        app_bot.add_handler(CommandHandler("broadcast", handle_broadcast))
-        
-        bot_running = True
-        logger.info("✅ Bot is running! Send /start to @GemCart_bot")
-        app_bot.run_polling()
-    except Exception as e:
-        bot_running = False
-        logger.error(f"❌ Bot failed: {e}")
-
-# ==================== GUNICORN HOOK ====================
-# This ensures the bot starts ONCE when Gunicorn loads the app
-# Using post_worker_init or preload_app depending on workers
-
-def start_bot_thread():
-    """Start bot in a daemon thread"""
-    bot_thread = threading.Thread(target=start_bot, daemon=True)
-    bot_thread.start()
-    return bot_thread
-
-# Start bot when this module is imported by Gunicorn
-# Only start if we're the main script OR if Gunicorn preload is on
-import sys
-if 'gunicorn' in sys.modules or __name__ == '__main__':
-    # Use a flag file to ensure only one bot instance runs
-    lock_file = '/tmp/gemcart_bot.lock'
-    
-    if not os.path.exists(lock_file):
-        with open(lock_file, 'w') as f:
-            f.write(str(os.getpid()))
-        init_db()
-        start_bot_thread()
-        
-        # Clean up lock file on exit
-        def cleanup():
-            if os.path.exists(lock_file):
-                os.remove(lock_file)
-        atexit.register(cleanup)
-    else:
-        logger.info("Bot already running in another process, skipping...")
+# Initialize DB
+init_db()
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
